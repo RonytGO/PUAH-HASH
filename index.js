@@ -125,7 +125,7 @@ app.get("/", async (req, res) => {
     password: process.env.PELE_PASSWORD,
     ActionType: "J4",
     Currency: "1",
-    FreeTotal: "False",
+    FreeTotal: "True",
     ShopNo: "001",
     Total: total,
     GoodURL: `${baseCallback}${commonQS}&Status=approved`,
