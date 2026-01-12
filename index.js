@@ -88,7 +88,7 @@ app.get("/db-ping", (_req, res) => {
 // 1) INIT PAYMENT (store registration info only in logs)
 app.get("/", async (req, res) => {
   const {
-    total = "6500",
+    total = "6600",
     RegID = "",
     FAResponseID = "",
     CustomerName = "",
