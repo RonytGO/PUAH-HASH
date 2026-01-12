@@ -125,7 +125,7 @@ app.get("/", async (req, res) => {
     password: process.env.PELE_PASSWORD,
     ActionType: "J4",
     Currency: "1",
-    FreeTotal: "True",
+    FreeTotal: "False",
     ShopNo: "001",
     Total: total,
     GoodURL: `${baseCallback}${commonQS}&Status=approved`,
@@ -273,7 +273,7 @@ app.get("/callback", async (req, res) => {
   const receiptUrl = savedData.receiptUrl || "";
 
   const onward =
-    `https://puah.tfaforms.net/17` +
+    `https://puah.tfaforms.net/35` +
     `?RegID=${encodeURIComponent(RegID)}` +
     `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
     `&Total=${encodeURIComponent(Total)}` +
