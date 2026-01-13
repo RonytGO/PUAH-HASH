@@ -42,10 +42,11 @@ const unwrapSummit = (obj) => (obj && obj.Data ? obj.Data : obj || {});
 /* ---------------- INIT PAYMENT ---------------- */
 
 app.get("/", async (req, res) => {
-  const { RegID = "", total = "6600", CustomerName = "", CustomerEmail = "", phone = "" } = req.query;
+  const { RegID = "", total = "6600", CustomerName = "", CustomerEmail = "", phone = "",item="" } = req.query;
   if (!RegID) return res.status(400).send("Missing RegID");
 
-  await writeTransactionData(RegID, { CustomerName, CustomerEmail });
+  await writeTransactionData(RegID, { CustomerName, CustomerEmail, item });
+
 
   const baseCallback = `https://${req.get("host")}/callback`;
   const serverCallback = `https://${req.get("host")}/pelecard-callback`;
@@ -113,7 +114,7 @@ app.post("/pelecard-callback", async (req, res) => {
         Quantity: 1,
         UnitPrice: amount,
         TotalPrice: amount,
-        Item: { Name: "Registration" }
+        Item: { Name: saved.item }
       }],
       Payments: [{
         Amount: amount,
