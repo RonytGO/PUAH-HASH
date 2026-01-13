@@ -71,9 +71,9 @@ user: process.env.PELE_USER,
 password: process.env.PELE_PASSWORD,
 ActionType: "J4",
 Currency: "1",
-FreeTotal: "False",
+FreeTotal: "True",
 ShopNo: "001",
-Total: total,
+Total: 0,
 NotificationGoodMail: "ronyt@puah.org.il", 
 NotificationErrorMail: "ronyt@puah.org.il",
 GoodURL: `${baseCallback}?Status=approved&Total=${encodeURIComponent(total)}`,
@@ -118,8 +118,8 @@ const saved = await readTransactionData(regId);
 const summitPayload = {
 Details: {
 Date: new Date().toISOString(),
-        Customer: { Name: saved.CustomerName || "Client", EmailAddress: saved.CustomerEmail || "hd@puah.org.il" },
-        SendByEmail: { EmailAddress: saved.CustomerEmail || "hd@puah.org.il", Original: true },
+        Customer: { Name: saved.CustomerName || "Client", EmailAddress: saved.CustomerEmail || "sa2@puah.org.il" },
+        SendByEmail: { EmailAddress: saved.CustomerEmail || "sa2@puah.org.il", Original: true },
         Customer: { Name: saved.CustomerName || "Client", EmailAddress: saved.CustomerEmail || "sa2@puah.org.il " },
         SendByEmail: { EmailAddress: saved.CustomerEmail || "sa2@puah.org.il ", Original: true },
 Type: 1,
@@ -130,7 +130,7 @@ Items: [{
 Quantity: 1,
 UnitPrice: amount,
 TotalPrice: amount,
-Item: { Name: "Registration" }
+Item: { Name: "השגחה" }
 }],
 Payments: [{
 Amount: amount,
@@ -152,7 +152,7 @@ body: JSON.stringify(summitPayload)
 
 const summit = unwrapSummit(await summitRes.json());
 if (summit.DocumentDownloadURL) {
-await writeTransactionData(regId, { ...saved, receiptUrl: summit.DocumentDownloadURL });
+await writeTransactionData(regId, { ...saved, amount, receiptUrl: summit.DocumentDownloadURL });
 }
 
 res.send("OK");
@@ -175,7 +175,7 @@ res.redirect(
 `https://puah.tfaforms.net/38` +
 `?RegID=${encodeURIComponent(regId)}` +
 `&Status=${encodeURIComponent(Status)}` +
-`&Total=${encodeURIComponent(Total)}` +
+`&Total=${encodeURIComponent(saved.amount || "")}` +
 `&ReceiptURL=${encodeURIComponent(saved.receiptUrl || "")}`
 );
 });
