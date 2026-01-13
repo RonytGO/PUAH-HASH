@@ -1,5 +1,4 @@
 const express = require("express");
-const fetch = require("node-fetch");
 const bodyParser = require("body-parser");
 const fs = require("fs").promises;
 const path = require("path");
@@ -9,6 +8,32 @@ app.use(bodyParser.text({ type: "*/*" }));
 app.use(bodyParser.json());
 
 const RECEIPTS_DIR = path.join(__dirname, "receipts");
+
+/* ---------------- STORAGE ---------------- */
+
+const writeTransactionData = async (RegID, data) => {
+  try {
+    await fs.mkdir(RECEIPTS_DIR, { recursive: true });
+    await fs.writeFile(
+      path.join(RECEIPTS_DIR, `${RegID}.json`),
+      JSON.stringify(data)
+    );
+  } catch (err) {
+    console.error("WRITE FAIL", RegID, err);
+  }
+};
+
+const readTransactionData = async (RegID) => {
+  try {
+    const data = await fs.readFile(
+      path.join(RECEIPTS_DIR, `${RegID}.json`),
+      "utf8"
+    );
+    return JSON.parse(data);
+  } catch {
+    return {};
+  }
+};
 
 /* ---------------- HELPERS ---------------- */
 
@@ -38,11 +63,10 @@ const getPayments = (rd) => {
 
 const unwrapSummit = (obj) => (obj && obj.Data ? obj.Data : obj || {});
 
-
-/* ---------------- INIT PAYMENT ---------------- */
+/* ---------------- INIT ---------------- */
 
 app.get("/", async (req, res) => {
-  const { RegID = "", total = "6600", CustomerName = "", CustomerEmail = "", phone = "" } = req.query;
+  const { RegID = "", CustomerName = "", CustomerEmail = "" } = req.query;
   if (!RegID) return res.status(400).send("Missing RegID");
 
   await writeTransactionData(RegID, { CustomerName, CustomerEmail });
@@ -59,8 +83,6 @@ app.get("/", async (req, res) => {
     FreeTotal: "True",
     ShopNo: "001",
     Total: 0,
-    NotificationGoodMail: "ronyt@puah.org.il", 
-    NotificationErrorMail: "ronyt@puah.org.il",
     GoodURL: `${baseCallback}?Status=approved&RegID=${encodeURIComponent(RegID)}`,
     ErrorURL: `${baseCallback}?Status=failed&RegID=${encodeURIComponent(RegID)}`,
     ServerSideGoodFeedbackURL: serverCallback,
@@ -81,7 +103,7 @@ app.get("/", async (req, res) => {
   res.status(500).send(JSON.stringify(data));
 });
 
-/* ---------------- PELECARD WEBHOOK ---------------- */
+/* ---------------- WEBHOOK ---------------- */
 
 app.post("/pelecard-callback", async (req, res) => {
   try {
@@ -91,8 +113,8 @@ app.post("/pelecard-callback", async (req, res) => {
 
     const regId = String(rd.ParamX || "").trim();
     const txId = rd.TransactionId;
-    const status = rd.ShvaResult === "000" || rd.ShvaResult === "0" ? "approved" : "failed";
-    if (!txId || status !== "approved") return res.send("OK");
+    const ok = rd.ShvaResult === "000" || rd.ShvaResult === "0";
+    if (!txId || !ok) return res.send("OK");
 
     const amount = getAmountMinor(rd) / 100;
     const payments = getPayments(rd);
@@ -103,8 +125,8 @@ app.post("/pelecard-callback", async (req, res) => {
     const summitPayload = {
       Details: {
         Date: new Date().toISOString(),
-        Customer: { Name: saved.CustomerName || "Client", EmailAddress: saved.CustomerEmail || "sa2@puah.org.il " },
-        SendByEmail: { EmailAddress: saved.CustomerEmail || "sa2@puah.org.il ", Original: true },
+        Customer: { Name: saved.CustomerName || "Client", EmailAddress: saved.CustomerEmail || "hd@puah.org.il" },
+        SendByEmail: { EmailAddress: saved.CustomerEmail || "hd@puah.org.il", Original: true },
         Type: 1,
         ExternalReference: regId,
         Comments: `Pelecard ${txId}`
@@ -135,7 +157,7 @@ app.post("/pelecard-callback", async (req, res) => {
 
     const summit = unwrapSummit(await summitRes.json());
     if (summit.DocumentDownloadURL) {
-      await writeTransactionData(regId, { ...saved,paidAmount: amount, receiptUrl: summit.DocumentDownloadURL });
+      await writeTransactionData(regId, { ...saved, paidAmount: amount, receiptUrl: summit.DocumentDownloadURL });
     }
 
     res.send("OK");
@@ -144,26 +166,23 @@ app.post("/pelecard-callback", async (req, res) => {
   }
 });
 
-/* ---------------- CLIENT REDIRECT ---------------- */
+/* ---------------- CALLBACK ---------------- */
+
 app.get("/callback", async (req, res) => {
   const Status = req.query.Status || "";
-  const Total = req.query.Total || "";
   const regId = req.query.RegID || "";
-
 
   if (!regId) return res.redirect("https://puah.tfaforms.net/38?Status=failed");
 
   const saved = await readTransactionData(regId);
-  const paidAmount = saved.paidAmount || "";
 
   res.redirect(
     `https://puah.tfaforms.net/38` +
     `?RegID=${encodeURIComponent(regId)}` +
     `&Status=${encodeURIComponent(Status)}` +
-    `&Total=${encodeURIComponent(paidAmount)}` +
+    `&Total=${encodeURIComponent(saved.paidAmount || "")}` +
     `&ReceiptURL=${encodeURIComponent(saved.receiptUrl || "")}`
   );
 });
-
 
 app.listen(process.env.PORT || 8080, () => console.log("Server running"));
