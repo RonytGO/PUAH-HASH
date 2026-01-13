@@ -38,21 +38,6 @@ const getPayments = (rd) => {
 
 const unwrapSummit = (obj) => (obj && obj.Data ? obj.Data : obj || {});
 
-/* ---------------- FILE STORAGE ---------------- */
-
-const writeTransactionData = async (regId, data) => {
-  await fs.mkdir(RECEIPTS_DIR, { recursive: true });
-  await fs.writeFile(path.join(RECEIPTS_DIR, `${regId}.json`), JSON.stringify(data));
-};
-
-const readTransactionData = async (regId) => {
-  try {
-    const data = await fs.readFile(path.join(RECEIPTS_DIR, `${regId}.json`), "utf8");
-    return JSON.parse(data);
-  } catch {
-    return {};
-  }
-};
 
 /* ---------------- INIT PAYMENT ---------------- */
 
@@ -118,8 +103,8 @@ app.post("/pelecard-callback", async (req, res) => {
     const summitPayload = {
       Details: {
         Date: new Date().toISOString(),
-        Customer: { Name: saved.CustomerName || "Client", EmailAddress: saved.CustomerEmail || "hd@puah.org.il" },
-        SendByEmail: { EmailAddress: saved.CustomerEmail || "hd@puah.org.il", Original: true },
+        Customer: { Name: saved.CustomerName || "Client", EmailAddress: saved.CustomerEmail || "sa2@puah.org.il " },
+        SendByEmail: { EmailAddress: saved.CustomerEmail || "sa2@puah.org.il ", Original: true },
         Type: 1,
         ExternalReference: regId,
         Comments: `Pelecard ${txId}`
