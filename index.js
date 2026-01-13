@@ -61,8 +61,8 @@ app.get("/", async (req, res) => {
     Total: 0,
     NotificationGoodMail: "ronyt@puah.org.il", 
     NotificationErrorMail: "ronyt@puah.org.il",
-    GoodURL: `${baseCallback}?Status=approved&Total=${encodeURIComponent(total)}`,
-    ErrorURL: `${baseCallback}?Status=failed&Total=${encodeURIComponent(total)}`,
+    GoodURL: `${baseCallback}?Status=approved&RegID=${encodeURIComponent(RegID)}`,
+    ErrorURL: `${baseCallback}?Status=failed&RegID=${encodeURIComponent(RegID)}`,
     ServerSideGoodFeedbackURL: serverCallback,
     ServerSideErrorFeedbackURL: serverCallback,
     ParamX: RegID,
@@ -148,12 +148,13 @@ app.post("/pelecard-callback", async (req, res) => {
 app.get("/callback", async (req, res) => {
   const Status = req.query.Status || "";
   const Total = req.query.Total || "";
-  const regId = req.query.ParamX || "";
+  const regId = req.query.RegID || "";
+
 
   if (!regId) return res.redirect("https://puah.tfaforms.net/38?Status=failed");
 
   const saved = await readTransactionData(regId);
-  const paidAmount = saved.paidAmount || Total;
+  const paidAmount = saved.paidAmount || "";
 
   res.redirect(
     `https://puah.tfaforms.net/38` +
