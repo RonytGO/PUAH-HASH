@@ -167,18 +167,30 @@ app.get("/callback", async (req, res) => {
   const Status = req.query.Status || "";
   const regId = req.query.RegID || "";
 
-  if (!regId) return res.redirect("https://puah.tfaforms.net/35?Status=failed");
+  if (!regId) return res.redirect("https://puah.tfaforms.net/38?Status=failed");
 
-  const saved = await readTransactionData(regId);
+  let saved = {};
+  const start = Date.now();
+
+  while (Date.now() - start < 5000) {
+    saved = await readTransactionData(regId);
+    if (saved.amount) break;
+    await new Promise(r => setTimeout(r, 200));
+  }
+
+  if (!saved.amount) {
+    return res.redirect("https://puah.tfaforms.net/35?Status=failed");
+  }
 
   res.redirect(
     `https://puah.tfaforms.net/38` +
     `?RegID=${encodeURIComponent(regId)}` +
     `&Status=${encodeURIComponent(Status)}` +
-    `&Total=${encodeURIComponent(saved.amount || "")}` +
+    `&Total=${encodeURIComponent(saved.amount)}` +
     `&ReceiptURL=${encodeURIComponent(saved.receiptUrl || "")}`
   );
 });
+
 
 
 app.listen(process.env.PORT || 8080, () => console.log("Server running"));
