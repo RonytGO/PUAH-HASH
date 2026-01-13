@@ -45,7 +45,7 @@ const getPayments = (rd) => {
 
 const unwrapSummit = (obj) => (obj && typeof obj === "object" && obj.Data ? obj.Data : obj || {});
 
-const extractRegId = (rd) => {
+const extractRegID = (rd) => {
   const raw = String(rd.AdditionalDetailsParamX || rd.ParamX || "").trim();
   if (!raw) return "";
   if (!raw.includes("|")) return raw;
@@ -56,22 +56,22 @@ const extractRegId = (rd) => {
 /* ------------------- File-based storage for receipts and data ------------------- */
 const RECEIPTS_DIR = path.join(__dirname, "receipts");
 
-const writeTransactionData = async (regId, data) => {
+const writeTransactionData = async (RegID, data) => {
   try {
     await fs.mkdir(RECEIPTS_DIR, { recursive: true });
-    await fs.writeFile(path.join(RECEIPTS_DIR, `${regId}.json`), JSON.stringify(data));
+    await fs.writeFile(path.join(RECEIPTS_DIR, `${RegID}.json`), JSON.stringify(data));
   } catch (err) {
-    console.error(`Failed to write transaction data for ${regId}:`, err);
+    console.error(`Failed to write transaction data for ${RegID}:`, err);
   }
 };
 
-const readTransactionData = async (regId) => {
+const readTransactionData = async (RegID) => {
   try {
-    const data = await fs.readFile(path.join(RECEIPTS_DIR, `${regId}.json`), "utf8");
+    const data = await fs.readFile(path.join(RECEIPTS_DIR, `${RegID}.json`), "utf8");
     return JSON.parse(data);
   } catch (err) {
     if (err.code !== "ENOENT") {
-      console.error(`Failed to read transaction data for ${regId}:`, err);
+      console.error(`Failed to read transaction data for ${RegID}:`, err);
     }
     return {};
   }
@@ -162,7 +162,7 @@ app.post("/pelecard-callback", async (req, res) => {
     }
     const rd = bodyObj.ResultData || bodyObj.Result || bodyObj;
 
-    const regId = extractRegId(rd);
+    const RegID = extractRegID(rd);
     const txId = rd.TransactionId || null;
     const shva = rd.ShvaResult || rd.StatusCode || "";
     const status = (shva === "000" || shva === "0") ? "approved" : "failed";
@@ -173,10 +173,10 @@ app.post("/pelecard-callback", async (req, res) => {
     const errorMsg = rd.ErrorMessage || bodyObj.ErrorMessage || rd.StatusMessage || "";
 
     // Log webhook payload
-    console.log("Pelecard webhook:", { regId, txId, status, amountMinor, payments, last4, shva, errorMsg });
+    console.log("Pelecard webhook:", { RegID, txId, status, amountMinor, payments, last4, shva, errorMsg });
 
     // Read the data previously saved to a file
-    const savedData = await readTransactionData(regId);
+    const savedData = await readTransactionData(RegID);
     
     // Create + email (approved only)
     if (txId && status === "approved") {
@@ -197,7 +197,7 @@ app.post("/pelecard-callback", async (req, res) => {
             : undefined,
           Type: 1,
           Comments: `Pelecard Status: approved | Transaction: ${txId}`,
-          ExternalReference: regId || txId,
+          ExternalReference: RegID || txId,
           ClosingText: 'לכל שאלה / בירור, ניתן לפנות אלינו בדוא"ל לכתובת: hd@puah.org.il'
         },
         Items: [{
@@ -239,8 +239,8 @@ app.post("/pelecard-callback", async (req, res) => {
       const receiptUrl = sd?.DocumentDownloadURL || null;
 
       // Store the receipt URL with the original data
-      if (regId && receiptUrl) {
-        await writeTransactionData(regId, { ...savedData, receiptUrl });
+      if (RegID && receiptUrl) {
+        await writeTransactionData(RegID, { ...savedData,paidAmount: amount, receiptUrl });
       }
 
       console.log("Summit create response:", {
@@ -265,11 +265,12 @@ app.get("/callback", async (req, res) => {
   // Read the receipt URL from the file system
   const savedData = await readTransactionData(RegID);
   const receiptUrl = savedData.receiptUrl || "";
+  const paidAmount = savedData.paidAmount || "";
 
   const onward =
     `https://puah.tfaforms.net/38` +
     `?RegID=${encodeURIComponent(RegID)}` +
-    `&Total=${encodeURIComponent(Total)}` +
+    `&Total=${encodeURIComponent(paidAmount)}` +
     `&Status=${encodeURIComponent(Status)}` +
     `&ReceiptURL=${encodeURIComponent(receiptUrl)}`;
 
