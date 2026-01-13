@@ -74,8 +74,10 @@ app.get("/", async (req, res) => {
     FreeTotal: "False",
     ShopNo: "001",
     Total: total,
-    GoodURL: `${baseCallback}?Status=approved`,
-    ErrorURL: `${baseCallback}?Status=failed`,
+    NotificationGoodMail: "ronyt@puah.org.il", 
+    NotificationErrorMail: "ronyt@puah.org.il",
+    GoodURL: `${baseCallback}?Status=approved&Total=${encodeURIComponent(total)}`,
+    ErrorURL: `${baseCallback}?Status=failed&Total=${encodeURIComponent(total)}`,
     ServerSideGoodFeedbackURL: serverCallback,
     ServerSideErrorFeedbackURL: serverCallback,
     ParamX: RegID,
@@ -158,9 +160,9 @@ app.post("/pelecard-callback", async (req, res) => {
 });
 
 /* ---------------- CLIENT REDIRECT ---------------- */
-
 app.get("/callback", async (req, res) => {
   const Status = req.query.Status || "";
+  const Total = req.query.Total || "";
   const regId = req.query.ParamX || "";
 
   if (!regId) return res.redirect("https://puah.tfaforms.net/35?Status=failed");
@@ -171,8 +173,10 @@ app.get("/callback", async (req, res) => {
     `https://puah.tfaforms.net/35` +
     `?RegID=${encodeURIComponent(regId)}` +
     `&Status=${encodeURIComponent(Status)}` +
+    `&Total=${encodeURIComponent(Total)}` +
     `&ReceiptURL=${encodeURIComponent(saved.receiptUrl || "")}`
   );
 });
+
 
 app.listen(process.env.PORT || 8080, () => console.log("Server running"));
