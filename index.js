@@ -76,8 +76,8 @@ ShopNo: "001",
 Total: 0,
 NotificationGoodMail: "ronyt@puah.org.il", 
 NotificationErrorMail: "ronyt@puah.org.il",
-GoodURL: `${baseCallback}?Status=approved&Total=${encodeURIComponent(total)}`,
-ErrorURL: `${baseCallback}?Status=failed&Total=${encodeURIComponent(total)}`,
+GoodURL: `${baseCallback}?Status=approved&RegID=${encodeURIComponent(RegID)}`,
+ErrorURL: `${baseCallback}?Status=failed&RegID=${encodeURIComponent(RegID)}`,
 ServerSideGoodFeedbackURL: serverCallback,
 ServerSideErrorFeedbackURL: serverCallback,
 ParamX: RegID,
@@ -162,22 +162,22 @@ res.send("OK");
 });
 
 /* ---------------- CLIENT REDIRECT ---------------- */
+
 app.get("/callback", async (req, res) => {
-const Status = req.query.Status || "";
-const Total = req.query.Total || "";
-const regId = req.query.ParamX || "";
+  const Status = req.query.Status || "";
+  const regId = req.query.RegID || "";
 
-if (!regId) return res.redirect("https://puah.tfaforms.net/35?Status=failed");
+  if (!regId) return res.redirect("https://puah.tfaforms.net/35?Status=failed");
 
-const saved = await readTransactionData(regId);
+  const saved = await readTransactionData(regId);
 
-res.redirect(
-`https://puah.tfaforms.net/38` +
-`?RegID=${encodeURIComponent(regId)}` +
-`&Status=${encodeURIComponent(Status)}` +
-`&Total=${encodeURIComponent(saved.amount || "")}` +
-`&ReceiptURL=${encodeURIComponent(saved.receiptUrl || "")}`
-);
+  res.redirect(
+    `https://puah.tfaforms.net/38` +
+    `?RegID=${encodeURIComponent(regId)}` +
+    `&Status=${encodeURIComponent(Status)}` +
+    `&Total=${encodeURIComponent(saved.amount || "")}` +
+    `&ReceiptURL=${encodeURIComponent(saved.receiptUrl || "")}`
+  );
 });
 
 
