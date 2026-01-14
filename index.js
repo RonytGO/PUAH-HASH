@@ -46,12 +46,13 @@ const toInt = (v) => {
 };
 
 const getAmountMinor = (rd) => {
-  for (const c of [rd.DebitTotal, rd.TotalMinor, rd.AmountMinor, rd.Total]) {
+  for (const c of [rd.FreeTotalAmount, rd.DebitTotal, rd.TotalMinor, rd.AmountMinor, rd.Total]) {
     const n = toInt(c);
     if (n !== null) return n;
   }
   return 0;
 };
+
 
 const getPayments = (rd) => {
   for (const f of ["TotalPayments", "NumberOfPayments", "Payments", "PaymentsNum"]) {
