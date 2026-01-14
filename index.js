@@ -4,6 +4,8 @@ const fs = require("fs").promises;
 const path = require("path");
 
 const app = express();
+
+// Handle JSON and text for other endpoints
 app.use(bodyParser.text({ type: "*/*" }));
 app.use(bodyParser.json());
 
@@ -46,13 +48,35 @@ const toInt = (v) => {
 };
 
 const getAmountMinor = (rd) => {
-  for (const c of [rd.FreeTotalAmount, rd.DebitTotal, rd.TotalMinor, rd.AmountMinor, rd.Total]) {
+  // First check FreeTotalAmount - might be in shekels with decimals
+  if (rd.FreeTotalAmount) {
+    const freeTotalStr = String(rd.FreeTotalAmount);
+    // If it contains a decimal point (e.g., "150.00")
+    if (freeTotalStr.includes('.')) {
+      const shekels = parseFloat(freeTotalStr);
+      if (!isNaN(shekels)) {
+        return Math.round(shekels * 100); // Convert to agorot
+      }
+    }
+    // Otherwise try as integer
+    const n = toInt(rd.FreeTotalAmount);
+    if (n !== null) {
+      // If small number (< 100), assume it's in shekels
+      if (n > 0 && n < 100) {
+        return n * 100;
+      }
+      return n;
+    }
+  }
+  
+  // Check other amount fields
+  for (const c of [rd.TotalX100, rd.DebitTotal, rd.TotalMinor, rd.AmountMinor, rd.Total, rd.Amount]) {
     const n = toInt(c);
     if (n !== null) return n;
   }
+  
   return 0;
 };
-
 
 const getPayments = (rd) => {
   for (const f of ["TotalPayments", "NumberOfPayments", "Payments", "PaymentsNum"]) {
@@ -106,20 +130,70 @@ app.get("/", async (req, res) => {
 
 /* ---------------- WEBHOOK ---------------- */
 
-app.post("/pelecard-callback", async (req, res) => {
+// IMPORTANT: Pelecard sends application/x-www-form-urlencoded, not JSON
+app.post("/pelecard-callback", bodyParser.urlencoded({ extended: true }), async (req, res) => {
   try {
-    const raw = typeof req.body === "object" ? JSON.stringify(req.body) : String(req.body || "");
-    const body = JSON.parse(raw.replace(/'/g, '"'));
-    const rd = body.ResultData || body.Result || body;
+    console.log("Pelecard webhook received");
+    
+    let rd = {};
+    const body = req.body;
+    
+    // Pelecard can send data in two formats:
+    // 1. As a JSON string in a specific field (if resultDataKeyName was set)
+    // 2. As form-encoded key-value pairs
+    
+    // Check if we have a JSON string in the body
+    let jsonFound = false;
+    for (const [key, value] of Object.entries(body)) {
+      if (typeof value === 'string' && value.includes('TransactionId')) {
+        try {
+          rd = JSON.parse(value);
+          jsonFound = true;
+          console.log("Parsed JSON from field:", key);
+          break;
+        } catch (e) {
+          // Not JSON, continue
+        }
+      }
+    }
+    
+    // If no JSON string found, use the body as-is
+    if (!jsonFound) {
+      rd = body;
+      console.log("Using form data directly");
+    }
+    
+    console.log("Transaction ID:", rd.TransactionId);
+    console.log("ShvaResult:", rd.ShvaResult);
+    console.log("FreeTotalAmount:", rd.FreeTotalAmount);
+    console.log("All amount fields:", {
+      FreeTotalAmount: rd.FreeTotalAmount,
+      DebitTotal: rd.DebitTotal,
+      TotalX100: rd.TotalX100,
+      Total: rd.Total,
+      Amount: rd.Amount
+    });
 
     const regId = String(rd.ParamX || "").trim();
     const txId = rd.TransactionId;
     const ok = rd.ShvaResult === "000" || rd.ShvaResult === "0";
-    if (!txId || !ok) return res.send("OK");
+    
+    if (!regId) {
+      console.log("Missing RegID");
+      return res.send("OK");
+    }
+    
+    if (!txId || !ok) {
+      console.log("Transaction failed or missing:", { txId, ok });
+      return res.send("OK");
+    }
 
-    const amount = getAmountMinor(rd) / 100;
+    const amountMinor = getAmountMinor(rd);
+    const amount = amountMinor / 100;
     const payments = getPayments(rd);
     const last4 = (rd.CreditCardNumber || "").split("*").pop();
+
+    console.log("Calculated:", { amountMinor, amount, payments, last4 });
 
     const saved = await readTransactionData(regId);
 
@@ -159,10 +233,14 @@ app.post("/pelecard-callback", async (req, res) => {
     const summit = unwrapSummit(await summitRes.json());
     if (summit.DocumentDownloadURL) {
       await writeTransactionData(regId, { ...saved, paidAmount: amount, receiptUrl: summit.DocumentDownloadURL });
+      console.log("Saved receipt URL for", regId);
+    } else {
+      console.log("No receipt URL from Summit for", regId);
     }
 
     res.send("OK");
-  } catch {
+  } catch (error) {
+    console.error("Webhook error:", error);
     res.send("OK");
   }
 });
