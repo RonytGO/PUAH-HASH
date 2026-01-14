@@ -4,8 +4,6 @@ const fs = require("fs").promises;
 const path = require("path");
 
 const app = express();
-
-// Handle JSON and text for other endpoints
 app.use(bodyParser.text({ type: "*/*" }));
 app.use(bodyParser.json());
 
@@ -48,33 +46,10 @@ const toInt = (v) => {
 };
 
 const getAmountMinor = (rd) => {
-  // First check FreeTotalAmount - might be in shekels with decimals
-  if (rd.FreeTotalAmount) {
-    const freeTotalStr = String(rd.FreeTotalAmount);
-    // If it contains a decimal point (e.g., "150.00")
-    if (freeTotalStr.includes('.')) {
-      const shekels = parseFloat(freeTotalStr);
-      if (!isNaN(shekels)) {
-        return Math.round(shekels * 100); // Convert to agorot
-      }
-    }
-    // Otherwise try as integer
-    const n = toInt(rd.FreeTotalAmount);
-    if (n !== null) {
-      // If small number (< 100), assume it's in shekels
-      if (n > 0 && n < 100) {
-        return n * 100;
-      }
-      return n;
-    }
-  }
-  
-  // Check other amount fields
-  for (const c of [rd.TotalX100, rd.DebitTotal, rd.TotalMinor, rd.AmountMinor, rd.Total, rd.Amount]) {
+  for (const c of [rd.TotalX100, rd.FreeTotalAmount, rd.DebitTotal, rd.TotalMinor, rd.AmountMinor, rd.Total, rd.Amount]) {
     const n = toInt(c);
     if (n !== null) return n;
   }
-  
   return 0;
 };
 
@@ -87,6 +62,32 @@ const getPayments = (rd) => {
 };
 
 const unwrapSummit = (obj) => (obj && obj.Data ? obj.Data : obj || {});
+
+/* ---------------- GET TRANSACTION FROM PELECARD ---------------- */
+
+const getPelecardTransaction = async (transactionId) => {
+  try {
+    const payload = {
+      terminal: process.env.PELE_TERMINAL,
+      user: process.env.PELE_USER,
+      password: process.env.PELE_PASSWORD,
+      TransactionId: transactionId
+    };
+
+    const response = await fetch("https://gateway21.pelecard.biz/PaymentGW/GetTransaction", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await response.json();
+    console.log("GetTransaction response:", data);
+    return data;
+  } catch (error) {
+    console.error("GetTransaction error:", error);
+    return null;
+  }
+};
 
 /* ---------------- INIT ---------------- */
 
@@ -130,61 +131,68 @@ app.get("/", async (req, res) => {
 
 /* ---------------- WEBHOOK ---------------- */
 
-// IMPORTANT: Pelecard sends application/x-www-form-urlencoded, not JSON
 app.post("/pelecard-callback", bodyParser.urlencoded({ extended: true }), async (req, res) => {
   try {
-    console.log("Pelecard webhook received");
+    console.log("Pelecard webhook received - RAW BODY:");
+    console.log("Content-Type:", req.headers['content-type']);
+    console.log("Body keys:", Object.keys(req.body));
     
+    // Log ALL form data
+    for (const [key, value] of Object.entries(req.body)) {
+      console.log(`${key}: ${value}`);
+    }
+    
+    // Try different parsing approaches
     let rd = {};
-    const body = req.body;
     
-    // Pelecard can send data in two formats:
-    // 1. As a JSON string in a specific field (if resultDataKeyName was set)
-    // 2. As form-encoded key-value pairs
-    
-    // Check if we have a JSON string in the body
-    let jsonFound = false;
-    for (const [key, value] of Object.entries(body)) {
-      if (typeof value === 'string' && value.includes('TransactionId')) {
+    // Approach 1: Check if there's a JSON string in any field
+    for (const [key, value] of Object.entries(req.body)) {
+      if (typeof value === 'string' && (value.includes('{') || value.includes('TransactionId'))) {
         try {
-          rd = JSON.parse(value);
-          jsonFound = true;
-          console.log("Parsed JSON from field:", key);
-          break;
+          const parsed = JSON.parse(value);
+          if (parsed.TransactionId || parsed.ResultData) {
+            rd = parsed.ResultData || parsed;
+            console.log("Found JSON in field:", key);
+            break;
+          }
         } catch (e) {
-          // Not JSON, continue
+          // Not valid JSON
         }
       }
     }
     
-    // If no JSON string found, use the body as-is
-    if (!jsonFound) {
-      rd = body;
+    // Approach 2: Use the form data directly
+    if (!rd.TransactionId) {
+      rd = req.body;
       console.log("Using form data directly");
     }
     
-    console.log("Transaction ID:", rd.TransactionId);
-    console.log("ShvaResult:", rd.ShvaResult);
-    console.log("FreeTotalAmount:", rd.FreeTotalAmount);
-    console.log("All amount fields:", {
-      FreeTotalAmount: rd.FreeTotalAmount,
-      DebitTotal: rd.DebitTotal,
-      TotalX100: rd.TotalX100,
-      Total: rd.Total,
-      Amount: rd.Amount
-    });
-
-    const regId = String(rd.ParamX || "").trim();
-    const txId = rd.TransactionId;
-    const ok = rd.ShvaResult === "000" || rd.ShvaResult === "0";
+    console.log("Parsed rd keys:", Object.keys(rd));
+    console.log("Transaction ID:", rd.TransactionId || rd.transactionId);
+    console.log("ShvaResult:", rd.ShvaResult || rd.shvaResult);
     
-    if (!regId) {
-      console.log("Missing RegID");
+    // If we have a transaction ID, get full details from Pelecard
+    const txId = rd.TransactionId || rd.transactionId;
+    const regId = String(rd.ParamX || rd.paramX || "").trim();
+    
+    if (txId) {
+      console.log("Fetching transaction details for:", txId);
+      const transactionDetails = await getPelecardTransaction(txId);
+      
+      if (transactionDetails && transactionDetails.ResultData) {
+        rd = transactionDetails.ResultData;
+        console.log("Got transaction details from GetTransaction API");
+      }
+    }
+    
+    if (!txId || !regId) {
+      console.log("Missing transaction ID or RegID");
       return res.send("OK");
     }
     
-    if (!txId || !ok) {
-      console.log("Transaction failed or missing:", { txId, ok });
+    const ok = rd.ShvaResult === "000" || rd.ShvaResult === "0";
+    if (!ok) {
+      console.log("Transaction failed:", rd.ShvaResult);
       return res.send("OK");
     }
 
@@ -193,7 +201,14 @@ app.post("/pelecard-callback", bodyParser.urlencoded({ extended: true }), async 
     const payments = getPayments(rd);
     const last4 = (rd.CreditCardNumber || "").split("*").pop();
 
-    console.log("Calculated:", { amountMinor, amount, payments, last4 });
+    console.log("Transaction details:", {
+      amountMinor,
+      amount,
+      payments,
+      last4,
+      regId,
+      txId
+    });
 
     const saved = await readTransactionData(regId);
 
@@ -233,9 +248,9 @@ app.post("/pelecard-callback", bodyParser.urlencoded({ extended: true }), async 
     const summit = unwrapSummit(await summitRes.json());
     if (summit.DocumentDownloadURL) {
       await writeTransactionData(regId, { ...saved, paidAmount: amount, receiptUrl: summit.DocumentDownloadURL });
-      console.log("Saved receipt URL for", regId);
+      console.log("Saved receipt for", regId, "amount:", amount);
     } else {
-      console.log("No receipt URL from Summit for", regId);
+      console.log("No receipt URL from Summit");
     }
 
     res.send("OK");
@@ -250,17 +265,39 @@ app.post("/pelecard-callback", bodyParser.urlencoded({ extended: true }), async 
 app.get("/callback", async (req, res) => {
   const Status = req.query.Status || "";
   const regId = req.query.RegID || "";
+  const transactionId = req.query.PelecardTransactionId || "";
+
+  console.log("Callback received:", { Status, regId, transactionId });
 
   if (!regId) return res.redirect("https://puah.tfaforms.net/38?Status=failed");
 
   const saved = await readTransactionData(regId);
 
+  // If we don't have the amount yet, try to get it from Pelecard
+  if (!saved.paidAmount && transactionId) {
+    console.log("No amount in storage, fetching from Pelecard for:", transactionId);
+    const transactionDetails = await getPelecardTransaction(transactionId);
+    
+    if (transactionDetails && transactionDetails.ResultData) {
+      const rd = transactionDetails.ResultData;
+      const amountMinor = getAmountMinor(rd);
+      const amount = amountMinor / 100;
+      
+      if (amount > 0) {
+        await writeTransactionData(regId, { ...saved, paidAmount: amount });
+        console.log("Got amount from GetTransaction:", amount);
+      }
+    }
+  }
+
+  const updatedSaved = await readTransactionData(regId);
+
   res.redirect(
     `https://puah.tfaforms.net/38` +
     `?RegID=${encodeURIComponent(regId)}` +
     `&Status=${encodeURIComponent(Status)}` +
-    `&Total=${encodeURIComponent(saved.paidAmount || "")}` +
-    `&ReceiptURL=${encodeURIComponent(saved.receiptUrl || "")}`
+    `&Total=${encodeURIComponent(updatedSaved.paidAmount || "")}` +
+    `&ReceiptURL=${encodeURIComponent(updatedSaved.receiptUrl || "")}`
   );
 });
 
