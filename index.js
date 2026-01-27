@@ -46,7 +46,15 @@ const toInt = (v) => {
 };
 
 const getAmountMinor = (rd) => {
-  for (const c of [rd.TotalX100, rd.FreeTotalAmount, rd.DebitTotal, rd.TotalMinor, rd.AmountMinor, rd.Total, rd.Amount]) {
+  for (const c of [
+    rd.TotalX100,
+    rd.FreeTotalAmount,
+    rd.DebitTotal,
+    rd.TotalMinor,
+    rd.AmountMinor,
+    rd.Total,
+    rd.Amount,
+  ]) {
     const n = toInt(c);
     if (n !== null) return n;
   }
@@ -61,6 +69,22 @@ const getPayments = (rd) => {
   return 1;
 };
 
+// NEW: normalize last4 from various possible fields
+const getLast4 = (rd) => {
+  const raw =
+    rd.CreditCardNumber ||
+    rd.CreditCard ||
+    rd.CardNumber ||
+    rd.cardNumber ||
+    rd.cc ||
+    "";
+  const s = String(raw).trim();
+  if (!s) return "";
+  // take last 4 digits from the string, regardless of masking
+  const m = s.match(/(\d{4})\D*$/);
+  return m ? m[1] : "";
+};
+
 const unwrapSummit = (obj) => (obj && obj.Data ? obj.Data : obj || {});
 
 /* ---------------- GET TRANSACTION FROM PELECARD ---------------- */
@@ -71,14 +95,17 @@ const getPelecardTransaction = async (transactionId) => {
       terminal: process.env.PELE_TERMINAL,
       user: process.env.PELE_USER,
       password: process.env.PELE_PASSWORD,
-      TransactionId: transactionId
+      TransactionId: transactionId,
     };
 
-    const response = await fetch("https://gateway21.pelecard.biz/PaymentGW/GetTransaction", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
+    const response = await fetch(
+      "https://gateway21.pelecard.biz/PaymentGW/GetTransaction",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    );
 
     const data = await response.json();
     console.log("GetTransaction response:", data);
@@ -115,13 +142,13 @@ app.get("/", async (req, res) => {
     ServerSideErrorFeedbackURL: serverCallback,
     ParamX: RegID,
     MaxPayments: "10",
-    MinPayments: "1"
+    MinPayments: "1",
   };
 
   const peleRes = await fetch("https://gateway21.pelecard.biz/PaymentGW/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   const data = await peleRes.json();
@@ -131,134 +158,171 @@ app.get("/", async (req, res) => {
 
 /* ---------------- WEBHOOK ---------------- */
 
-app.post("/pelecard-callback", bodyParser.urlencoded({ extended: true }), async (req, res) => {
-  try {
-    console.log("Pelecard webhook received - RAW BODY:");
-    console.log("Content-Type:", req.headers['content-type']);
-    console.log("Body keys:", Object.keys(req.body));
-    
-    // Log ALL form data
-    for (const [key, value] of Object.entries(req.body)) {
-      console.log(`${key}: ${value}`);
-    }
-    
-    // Try different parsing approaches
-    let rd = {};
-    
-    // Approach 1: Check if there's a JSON string in any field
-    for (const [key, value] of Object.entries(req.body)) {
-      if (typeof value === 'string' && (value.includes('{') || value.includes('TransactionId'))) {
-        try {
-          const parsed = JSON.parse(value);
-          if (parsed.TransactionId || parsed.ResultData) {
-            rd = parsed.ResultData || parsed;
-            console.log("Found JSON in field:", key);
-            break;
+app.post(
+  "/pelecard-callback",
+  bodyParser.urlencoded({ extended: true }),
+  async (req, res) => {
+    try {
+      console.log("Pelecard webhook received - RAW BODY:");
+      console.log("Content-Type:", req.headers["content-type"]);
+      console.log("Body keys:", Object.keys(req.body));
+
+      // Log ALL form data
+      for (const [key, value] of Object.entries(req.body)) {
+        console.log(`${key}: ${value}`);
+      }
+
+      // Try different parsing approaches
+      let rd = {};
+
+      // Approach 1: Check if there's a JSON string in any field
+      for (const [key, value] of Object.entries(req.body)) {
+        if (
+          typeof value === "string" &&
+          (value.includes("{") || value.includes("TransactionId"))
+        ) {
+          try {
+            const parsed = JSON.parse(value);
+            if (parsed.TransactionId || parsed.ResultData) {
+              rd = parsed.ResultData || parsed;
+              console.log("Found JSON in field:", key);
+              break;
+            }
+          } catch (e) {
+            // Not valid JSON
           }
-        } catch (e) {
-          // Not valid JSON
         }
       }
-    }
-    
-    // Approach 2: Use the form data directly
-    if (!rd.TransactionId) {
-      rd = req.body;
-      console.log("Using form data directly");
-    }
-    
-    console.log("Parsed rd keys:", Object.keys(rd));
-    console.log("Transaction ID:", rd.TransactionId || rd.transactionId);
-    console.log("ShvaResult:", rd.ShvaResult || rd.shvaResult);
-    
-    // If we have a transaction ID, get full details from Pelecard
-    const txId = rd.TransactionId || rd.transactionId;
-    const regId = String(rd.ParamX || rd.paramX || "").trim();
-    
-    if (txId) {
-      console.log("Fetching transaction details for:", txId);
-      const transactionDetails = await getPelecardTransaction(txId);
-      
-      if (transactionDetails && transactionDetails.ResultData) {
-        rd = transactionDetails.ResultData;
-        console.log("Got transaction details from GetTransaction API");
+
+      // Approach 2: Use the form data directly
+      if (!rd.TransactionId) {
+        rd = req.body;
+        console.log("Using form data directly");
       }
-    }
-    
-    if (!txId || !regId) {
-      console.log("Missing transaction ID or RegID");
-      return res.send("OK");
-    }
-    
-    const ok = rd.ShvaResult === "000" || rd.ShvaResult === "0";
-    if (!ok) {
-      console.log("Transaction failed:", rd.ShvaResult);
-      return res.send("OK");
-    }
 
-    const amountMinor = getAmountMinor(rd);
-    const amount = amountMinor / 100;
-    const payments = getPayments(rd);
-    const last4 = (rd.CreditCardNumber || "").split("*").pop();
+      console.log("Parsed rd keys:", Object.keys(rd));
+      console.log("Transaction ID:", rd.TransactionId || rd.transactionId);
+      console.log("ShvaResult:", rd.ShvaResult || rd.shvaResult);
 
-    console.log("Transaction details:", {
-      amountMinor,
-      amount,
-      payments,
-      last4,
-      regId,
-      txId
-    });
+      // If we have a transaction ID, get full details from Pelecard
+      const txId = rd.TransactionId || rd.transactionId;
+      const regId = String(rd.ParamX || rd.paramX || "").trim();
 
-    const saved = await readTransactionData(regId);
+      if (txId) {
+        console.log("Fetching transaction details for:", txId);
+        const transactionDetails = await getPelecardTransaction(txId);
 
-    const summitPayload = {
-      Details: {
-        Date: new Date().toISOString(),
-        Customer: { Name: saved.CustomerName || "Client", EmailAddress: saved.CustomerEmail || "hd@puah.org.il" },
-        SendByEmail: { EmailAddress: saved.CustomerEmail || "hd@puah.org.il", Original: true },
-        Type: 1,
-        ExternalReference: regId,
-        Comments: `Pelecard ${txId}`
-      },
-      Items: [{
-        Quantity: 1,
-        UnitPrice: amount,
-        TotalPrice: amount,
-        Item: { Name: "Registration" }
-      }],
-      Payments: [{
-        Amount: amount,
-        Type: 5,
-        Details_CreditCard: { Last4Digits: last4, Payments: payments }
-      }],
-      VATIncluded: true,
-      Credentials: {
-        CompanyID: Number(process.env.SUMMIT_COMPANY_ID),
-        APIKey: process.env.SUMMIT_API_KEY
+        if (transactionDetails && transactionDetails.ResultData) {
+          rd = transactionDetails.ResultData;
+          console.log("Got transaction details from GetTransaction API");
+        }
       }
-    };
 
-    const summitRes = await fetch("https://app.sumit.co.il/accounting/documents/create/", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(summitPayload)
-    });
+      if (!txId || !regId) {
+        console.log("Missing transaction ID or RegID");
+        return res.send("OK");
+      }
 
-    const summit = unwrapSummit(await summitRes.json());
-    if (summit.DocumentDownloadURL) {
-      await writeTransactionData(regId, { ...saved, paidAmount: amount, receiptUrl: summit.DocumentDownloadURL });
-      console.log("Saved receipt for", regId, "amount:", amount);
-    } else {
-      console.log("No receipt URL from Summit");
+      const ok = rd.ShvaResult === "000" || rd.ShvaResult === "0";
+      if (!ok) {
+        console.log("Transaction failed:", rd.ShvaResult);
+        return res.send("OK");
+      }
+
+      const amountMinor = getAmountMinor(rd);
+      const amount = amountMinor / 100;
+      const payments = getPayments(rd);
+
+      // NEW: reliable last4 extraction (supports masked "555888******6124")
+      const last4 = getLast4(rd);
+
+      console.log("Transaction details:", {
+        amountMinor,
+        amount,
+        payments,
+        last4,
+        regId,
+        txId,
+      });
+
+      const saved = await readTransactionData(regId);
+
+      // NEW: persist last4 so /callback can forward it to TFA
+      await writeTransactionData(regId, {
+        ...saved,
+        last4,
+      });
+
+      const summitPayload = {
+        Details: {
+          Date: new Date().toISOString(),
+          Customer: {
+            Name: saved.CustomerName || "Client",
+            EmailAddress: saved.CustomerEmail || "hd@puah.org.il",
+          },
+          SendByEmail: {
+            EmailAddress: saved.CustomerEmail || "hd@puah.org.il",
+            Original: true,
+          },
+          Type: 1,
+          ExternalReference: regId,
+          Comments: `Pelecard ${txId}`,
+        },
+        Items: [
+          {
+            Quantity: 1,
+            UnitPrice: amount,
+            TotalPrice: amount,
+            Item: { Name: "Registration" },
+          },
+        ],
+        Payments: [
+          {
+            Amount: amount,
+            Type: 5,
+            Details_CreditCard: { Last4Digits: last4, Payments: payments },
+          },
+        ],
+        VATIncluded: true,
+        Credentials: {
+          CompanyID: Number(process.env.SUMMIT_COMPANY_ID),
+          APIKey: process.env.SUMMIT_API_KEY,
+        },
+      };
+
+      const summitRes = await fetch(
+        "https://app.sumit.co.il/accounting/documents/create/",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(summitPayload),
+        }
+      );
+
+      const summit = unwrapSummit(await summitRes.json());
+      if (summit.DocumentDownloadURL) {
+        await writeTransactionData(regId, {
+          ...(await readTransactionData(regId)),
+          paidAmount: amount,
+          receiptUrl: summit.DocumentDownloadURL,
+        });
+        console.log("Saved receipt for", regId, "amount:", amount);
+      } else {
+        // still store amount even if receipt URL missing
+        await writeTransactionData(regId, {
+          ...(await readTransactionData(regId)),
+          paidAmount: amount,
+        });
+        console.log("No receipt URL from Summit");
+      }
+
+      res.send("OK");
+    } catch (error) {
+      console.error("Webhook error:", error);
+      res.send("OK");
     }
-
-    res.send("OK");
-  } catch (error) {
-    console.error("Webhook error:", error);
-    res.send("OK");
   }
-});
+);
 
 /* ---------------- CALLBACK ---------------- */
 
@@ -277,15 +341,21 @@ app.get("/callback", async (req, res) => {
   if (!saved.paidAmount && transactionId) {
     console.log("No amount in storage, fetching from Pelecard for:", transactionId);
     const transactionDetails = await getPelecardTransaction(transactionId);
-    
+
     if (transactionDetails && transactionDetails.ResultData) {
       const rd = transactionDetails.ResultData;
       const amountMinor = getAmountMinor(rd);
       const amount = amountMinor / 100;
-      
-      if (amount > 0) {
-        await writeTransactionData(regId, { ...saved, paidAmount: amount });
-        console.log("Got amount from GetTransaction:", amount);
+
+      const last4 = getLast4(rd);
+
+      if (amount > 0 || last4) {
+        await writeTransactionData(regId, {
+          ...saved,
+          ...(amount > 0 ? { paidAmount: amount } : {}),
+          ...(last4 ? { last4 } : {}),
+        });
+        console.log("Got data from GetTransaction:", { amount, last4 });
       }
     }
   }
@@ -294,10 +364,11 @@ app.get("/callback", async (req, res) => {
 
   res.redirect(
     `https://puah.tfaforms.net/38` +
-    `?RegID=${encodeURIComponent(regId)}` +
-    `&Status=${encodeURIComponent(Status)}` +
-    `&Total=${encodeURIComponent(updatedSaved.paidAmount || "")}` +
-    `&ReceiptURL=${encodeURIComponent(updatedSaved.receiptUrl || "")}`
+      `?RegID=${encodeURIComponent(regId)}` +
+      `&Status=${encodeURIComponent(Status)}` +
+      `&Total=${encodeURIComponent(updatedSaved.paidAmount || "")}` +
+      `&ReceiptURL=${encodeURIComponent(updatedSaved.receiptUrl || "")}` +
+      `&Last4=${encodeURIComponent(updatedSaved.last4 || "")}`
   );
 });
 
