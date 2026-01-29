@@ -3,8 +3,6 @@ const bodyParser = require("body-parser");
 const fs = require("fs").promises;
 const path = require("path");
 
-const handleJ5 = require("./pelecardJ5");
-
 const app = express();
 app.use(bodyParser.text({ type: "*/*" }));
 app.use(bodyParser.json());
@@ -71,6 +69,7 @@ const getPayments = (rd) => {
   return 1;
 };
 
+// NEW: normalize last4 from various possible fields
 const getLast4 = (rd) => {
   const raw =
     rd.CreditCardNumber ||
@@ -81,6 +80,7 @@ const getLast4 = (rd) => {
     "";
   const s = String(raw).trim();
   if (!s) return "";
+  // take last 4 digits from the string, regardless of masking
   const m = s.match(/(\d{4})\D*$/);
   return m ? m[1] : "";
 };
@@ -119,14 +119,6 @@ const getPelecardTransaction = async (transactionId) => {
 /* ---------------- INIT ---------------- */
 
 app.get("/", async (req, res) => {
-  const actionType = req.query.ActionType;
-
-  if (actionType === "J5") {
-    return handleJ5(req, res);
-  }
-
-  // -------- J4 FLOW (UNCHANGED) --------
-
   const { RegID = "", CustomerName = "", CustomerEmail = "" } = req.query;
   if (!RegID) return res.status(400).send("Missing RegID");
 
@@ -175,12 +167,15 @@ app.post(
       console.log("Content-Type:", req.headers["content-type"]);
       console.log("Body keys:", Object.keys(req.body));
 
+      // Log ALL form data
       for (const [key, value] of Object.entries(req.body)) {
         console.log(`${key}: ${value}`);
       }
 
+      // Try different parsing approaches
       let rd = {};
 
+      // Approach 1: Check if there's a JSON string in any field
       for (const [key, value] of Object.entries(req.body)) {
         if (
           typeof value === "string" &&
@@ -190,38 +185,69 @@ app.post(
             const parsed = JSON.parse(value);
             if (parsed.TransactionId || parsed.ResultData) {
               rd = parsed.ResultData || parsed;
+              console.log("Found JSON in field:", key);
               break;
             }
-          } catch {}
+          } catch (e) {
+            // Not valid JSON
+          }
         }
       }
 
+      // Approach 2: Use the form data directly
       if (!rd.TransactionId) {
         rd = req.body;
+        console.log("Using form data directly");
       }
 
+      console.log("Parsed rd keys:", Object.keys(rd));
+      console.log("Transaction ID:", rd.TransactionId || rd.transactionId);
+      console.log("ShvaResult:", rd.ShvaResult || rd.shvaResult);
+
+      // If we have a transaction ID, get full details from Pelecard
       const txId = rd.TransactionId || rd.transactionId;
       const regId = String(rd.ParamX || rd.paramX || "").trim();
 
       if (txId) {
+        console.log("Fetching transaction details for:", txId);
         const transactionDetails = await getPelecardTransaction(txId);
+
         if (transactionDetails && transactionDetails.ResultData) {
           rd = transactionDetails.ResultData;
+          console.log("Got transaction details from GetTransaction API");
         }
       }
 
-      if (!txId || !regId) return res.send("OK");
+      if (!txId || !regId) {
+        console.log("Missing transaction ID or RegID");
+        return res.send("OK");
+      }
 
       const ok = rd.ShvaResult === "000" || rd.ShvaResult === "0";
-      if (!ok) return res.send("OK");
+      if (!ok) {
+        console.log("Transaction failed:", rd.ShvaResult);
+        return res.send("OK");
+      }
 
       const amountMinor = getAmountMinor(rd);
       const amount = amountMinor / 100;
       const payments = getPayments(rd);
+
+      // NEW: reliable last4 extraction (supports masked "555888******6124")
       const last4 = getLast4(rd);
+
+      console.log("Transaction details:", {
+        amountMinor,
+        amount,
+        payments,
+        last4,
+        regId,
+        txId,
+      });
 
       const saved = await readTransactionData(regId);
 
+      // NEW: persist last4 so /callback can forward it to TFA
       await writeTransactionData(regId, {
         ...saved,
         last4,
@@ -274,18 +300,20 @@ app.post(
       );
 
       const summit = unwrapSummit(await summitRes.json());
-
       if (summit.DocumentDownloadURL) {
         await writeTransactionData(regId, {
           ...(await readTransactionData(regId)),
           paidAmount: amount,
           receiptUrl: summit.DocumentDownloadURL,
         });
+        console.log("Saved receipt for", regId, "amount:", amount);
       } else {
+        // still store amount even if receipt URL missing
         await writeTransactionData(regId, {
           ...(await readTransactionData(regId)),
           paidAmount: amount,
         });
+        console.log("No receipt URL from Summit");
       }
 
       res.send("OK");
@@ -303,16 +331,22 @@ app.get("/callback", async (req, res) => {
   const regId = req.query.RegID || "";
   const transactionId = req.query.PelecardTransactionId || "";
 
+  console.log("Callback received:", { Status, regId, transactionId });
+
   if (!regId) return res.redirect("https://puah.tfaforms.net/38?Status=failed");
 
   const saved = await readTransactionData(regId);
 
+  // If we don't have the amount yet, try to get it from Pelecard
   if (!saved.paidAmount && transactionId) {
+    console.log("No amount in storage, fetching from Pelecard for:", transactionId);
     const transactionDetails = await getPelecardTransaction(transactionId);
+
     if (transactionDetails && transactionDetails.ResultData) {
       const rd = transactionDetails.ResultData;
       const amountMinor = getAmountMinor(rd);
       const amount = amountMinor / 100;
+
       const last4 = getLast4(rd);
 
       if (amount > 0 || last4) {
@@ -321,6 +355,7 @@ app.get("/callback", async (req, res) => {
           ...(amount > 0 ? { paidAmount: amount } : {}),
           ...(last4 ? { last4 } : {}),
         });
+        console.log("Got data from GetTransaction:", { amount, last4 });
       }
     }
   }
